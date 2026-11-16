@@ -4,7 +4,7 @@
  */
 
 // 1. API Configuration (default: http://127.0.0.1:8000)
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = "";
 
 // Allowed MIME types
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);

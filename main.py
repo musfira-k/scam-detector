@@ -4,10 +4,12 @@ import json
 import time
 import asyncio
 import logging
+from collections import defaultdict, deque
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, File, UploadFile, HTTPException, status
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from PIL import Image
 from google import genai
@@ -20,8 +22,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("scam-detector")
 
-# Load environment variables from .env
+# Load environment variables from .env (on Render they come from the dashboard)
 load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024  # 4 MB limit
 MAX_RETRIES = 3                         # 3 retry attempts on 503
@@ -29,6 +34,10 @@ INITIAL_RETRY_DELAY = 1.0               # Initial backoff delay in seconds
 GEMINI_TIMEOUT_SECONDS = 45.0           # 45 second timeout on Gemini call
 MAX_IMAGE_DIMENSION = 1280              # Max width/height for server downscaling
 JPEG_QUALITY = 85                       # JPEG re-encoding quality
+
+# Rate limit: protects your free Gemini quota
+RATE_LIMIT_REQUESTS = 10                # requests per IP
+RATE_LIMIT_WINDOW_SECONDS = 3600        # per hour
 
 # Standardized verdict labels
 ALLOWED_VERDICTS = {"Suspicious", "Unclear", "No red flags found"}
@@ -116,11 +125,42 @@ def downscale_image_if_needed(image_bytes: bytes, content_type: str) -> tuple[by
 
     return image_bytes, content_type
 
+
 app = FastAPI(
     title="Scam Detector API",
     description="Detect scam indicators in payment screenshots using Gemini.",
     version="1.0.0"
 )
+
+# ---------------------------------------------------------------------------
+# Rate limiting (registered BEFORE CORS so CORS stays the outermost layer)
+# ---------------------------------------------------------------------------
+_request_log: Dict[str, deque] = defaultdict(deque)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.method == "POST" and request.url.path == "/analyze":
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "unknown"
+
+        now = time.time()
+        hits = _request_log[client_ip]
+        while hits and now - hits[0] > RATE_LIMIT_WINDOW_SECONDS:
+            hits.popleft()
+
+        if len(hits) >= RATE_LIMIT_REQUESTS:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Too many requests. Please try again in a while."},
+            )
+        hits.append(now)
+
+    return await call_next(request)
+
 
 # CORS middleware reading allowed origins from ALLOWED_ORIGINS env variable
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "*")
@@ -150,7 +190,7 @@ def get_gemini_client() -> genai.Client:
 
 def get_gemini_model() -> str:
     """Retrieve the Gemini model name from environment variables."""
-    return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    return os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 
 def is_503_error(exc: Exception) -> bool:
@@ -342,251 +382,6 @@ async def call_gemini_with_retry(
     raise RuntimeError("Unexpected error during Gemini API call.")
 
 
-@app.get("/", response_class=HTMLResponse)
-def index_page():
-    """Simple web interface to test image upload and view results."""
-    html_content = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Scam Detector</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #f4f6f8;
-      color: #1a1a1a;
-      line-height: 1.5;
-      padding: 24px 16px;
-    }
-    .container {
-      max-width: 600px;
-      margin: 32px auto;
-      background: #ffffff;
-      border-radius: 12px;
-      padding: 32px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
-    }
-    h1 {
-      font-size: 24px;
-      font-weight: 700;
-      margin-bottom: 8px;
-      color: #111827;
-    }
-    p.subtitle {
-      color: #6b7280;
-      font-size: 14px;
-      margin-bottom: 24px;
-    }
-    .upload-zone {
-      border: 2px dashed #d1d5db;
-      border-radius: 8px;
-      padding: 32px 16px;
-      text-align: center;
-      cursor: pointer;
-      background: #fafafa;
-      transition: border-color 0.2s, background-color 0.2s;
-    }
-    .upload-zone:hover {
-      border-color: #3b82f6;
-      background: #f0f7ff;
-    }
-    .upload-zone input { display: none; }
-    .upload-label { font-size: 15px; color: #374151; font-weight: 500; cursor: pointer; }
-    .upload-hint { font-size: 12px; color: #9ca3af; margin-top: 4px; }
-    .selected-name {
-      margin-top: 12px;
-      font-size: 13px;
-      color: #2563eb;
-      font-weight: 500;
-      word-break: break-all;
-    }
-    button.btn {
-      display: block;
-      width: 100%;
-      margin-top: 20px;
-      padding: 12px;
-      background: #2563eb;
-      color: #ffffff;
-      border: none;
-      border-radius: 8px;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    button.btn:hover { background: #1d4ed8; }
-    button.btn:disabled { background: #9ca3af; cursor: not-allowed; }
-    .result-card {
-      margin-top: 28px;
-      border-radius: 8px;
-      padding: 20px;
-      display: none;
-    }
-    .badge {
-      display: inline-block;
-      padding: 6px 14px;
-      border-radius: 20px;
-      font-size: 14px;
-      font-weight: 700;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .badge-suspicious { background: #fee2e2; color: #991b1b; }
-    .badge-unclear { background: #fef3c7; color: #92400e; }
-    .badge-no-red-flags { background: #dcfce7; color: #166534; }
-    .result-card.suspicious-card { background: #fef2f2; border: 1px solid #fecaca; }
-    .result-card.unclear-card { background: #fffbeb; border: 1px solid #fde68a; }
-    .result-card.no-red-flags-card { background: #f0fdf4; border: 1px solid #bbf7d0; }
-    .reason-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 4px; }
-    .reason-text { font-size: 14px; color: #1f2937; margin-bottom: 16px; }
-    .advice-box {
-      background: #ffffff;
-      border-left: 4px solid #2563eb;
-      padding: 12px 14px;
-      border-radius: 4px;
-      font-size: 13px;
-      color: #1e3a8a;
-      line-height: 1.4;
-    }
-    .advice-box strong { display: block; margin-bottom: 2px; color: #1e40af; }
-    .error-box {
-      margin-top: 20px;
-      padding: 12px 16px;
-      background: #fee2e2;
-      border: 1px solid #fecaca;
-      border-radius: 8px;
-      color: #991b1b;
-      font-size: 14px;
-      display: none;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Payment Scam Detector</h1>
-    <p class="subtitle">Upload a payment screenshot to check for scam signs. Maximum file size is 4 MB.</p>
-
-    <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
-      <input type="file" id="fileInput" accept="image/*" onchange="handleFileChange(event)">
-      <div class="upload-label">Click here to choose an image</div>
-      <div class="upload-hint">Supports JPEG, PNG, WEBP (Up to 4 MB)</div>
-      <div id="selectedName" class="selected-name"></div>
-    </div>
-
-    <button id="analyzeBtn" class="btn" onclick="submitAnalysis()" disabled>Check Screenshot</button>
-
-    <div id="errorBox" class="error-box"></div>
-
-    <div id="resultCard" class="result-card">
-      <div id="verdictBadge" class="badge"></div>
-      <div class="reason-title">Explanation</div>
-      <div id="reasonText" class="reason-text"></div>
-      <div class="advice-box">
-        <strong>Important Advice</strong>
-        <span id="adviceText"></span>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const fileInput = document.getElementById('fileInput');
-    const selectedName = document.getElementById('selectedName');
-    const analyzeBtn = document.getElementById('analyzeBtn');
-    const resultCard = document.getElementById('resultCard');
-    const errorBox = document.getElementById('errorBox');
-    const verdictBadge = document.getElementById('verdictBadge');
-    const reasonText = document.getElementById('reasonText');
-    const adviceText = document.getElementById('adviceText');
-
-    function handleFileChange(event) {
-      errorBox.style.display = 'none';
-      resultCard.style.display = 'none';
-      const file = event.target.files[0];
-      if (file) {
-        if (file.size > 4 * 1024 * 1024) {
-          showError("File size is larger than 4 MB. Please pick a smaller image.");
-          fileInput.value = "";
-          selectedName.innerText = "";
-          analyzeBtn.disabled = true;
-          return;
-        }
-        selectedName.innerText = file.name + " (" + (file.size / 1024).toFixed(1) + " KB)";
-        analyzeBtn.disabled = false;
-      } else {
-        selectedName.innerText = "";
-        analyzeBtn.disabled = true;
-      }
-    }
-
-    function showError(msg) {
-      errorBox.innerText = msg;
-      errorBox.style.display = 'block';
-    }
-
-    async function submitAnalysis() {
-      const file = fileInput.files[0];
-      if (!file) return;
-
-      errorBox.style.display = 'none';
-      resultCard.style.display = 'none';
-      analyzeBtn.disabled = true;
-      analyzeBtn.innerText = "Checking...";
-
-      const formData = new FormData();
-      formData.append('image', file);
-
-      try {
-        const response = await fetch('/analyze', {
-          method: 'POST',
-          body: formData
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.detail || "Failed to analyze image.");
-        }
-
-        renderResult(data);
-      } catch (err) {
-        showError(err.message || "An unexpected error occurred. Please try again.");
-      } finally {
-        analyzeBtn.disabled = false;
-        analyzeBtn.innerText = "Check Screenshot";
-      }
-    }
-
-    function renderResult(data) {
-      const verdict = data.verdict;
-      verdictBadge.innerText = verdict;
-      reasonText.innerText = data.reason;
-      adviceText.innerText = data.advice;
-
-      resultCard.className = 'result-card';
-      verdictBadge.className = 'badge';
-
-      if (verdict === 'Suspicious') {
-        resultCard.classList.add('suspicious-card');
-        verdictBadge.classList.add('badge-suspicious');
-      } else if (verdict === 'Unclear') {
-        resultCard.classList.add('unclear-card');
-        verdictBadge.classList.add('badge-unclear');
-      } else {
-        resultCard.classList.add('no-red-flags-card');
-        verdictBadge.classList.add('badge-no-red-flags');
-      }
-
-      resultCard.style.display = 'block';
-    }
-  </script>
-</body>
-</html>"""
-    return HTMLResponse(content=html_content, status_code=200)
-
-
 @app.get("/health")
 def health_check():
     """Simple health check endpoint."""
@@ -675,13 +470,14 @@ async def analyze_image(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Gemini service is temporarily unavailable after 3 retry attempts. Please try again later."
             )
+        # Full details go to the server log only, not to the user
         logger.error("Failed to analyze image with Gemini: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gemini API error: {str(exc)}"
+            detail="The AI service returned an error. Please try again later."
         )
 
-    # 6. Parse and validate JSON response
+    # 7. Parse and validate JSON response
     raw_verdict = None
     raw_risk_score = None
     raw_reason = None
@@ -727,3 +523,13 @@ async def analyze_image(
             "advice": STANDARD_ADVICE,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Serve the frontend from the same server (must stay LAST, after all routes).
+# One link then works for everything: page + API.
+# ---------------------------------------------------------------------------
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    logger.warning("frontend/ folder not found, only the API is available.")
