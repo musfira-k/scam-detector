@@ -1,138 +1,116 @@
 # Payment Screenshot Scam Detector
 
-A simple FastAPI service that checks payment screenshots (like JazzCash and Easypaisa) for scam and forgery signs using the Gemini API.
+An AI-assisted tool that checks payment screenshots and scam messages for warning signs.
+Built with FastAPI, Gemini and a dark glassmorphism frontend in plain HTML, CSS and JavaScript.
 
----
+> **Important:** This tool cannot prove that a payment is genuine. It only looks for red flags.
+> Always confirm a payment in your own JazzCash/Easypaisa app or official SMS.
 
 ## Features
 
-- **Fast & Simple**: Upload a screenshot to check if it looks edited or suspicious.
-- **Strict Verdicts**: Every result is classified into one of three simple labels:
-  - `Suspicious`: Signs of editing, fake templates, or manipulation found.
-  - `Unclear`: Blurry image, cropped image, or not a payment screenshot.
-  - `No red flags found`: No obvious signs of editing detected.
-  *(Note: The word "Real" is never used for a verdict).*
-- **Safety Advice**: Every response includes practical safety advice:
-  > *"Please check your JazzCash/Easypaisa app or official SMS to confirm the payment. Do not trust screenshots alone."*
-- **File Limit**: Images up to 4 MB are supported.
-- **Automatic Retry**: If the Gemini API returns a temporary 503 error, the system automatically retries up to 3 times.
-- **Built-in Web Page**: Open your browser to test images directly.
+- Upload a screenshot (JPEG, PNG, WEBP, up to 4 MB) and get a verdict, a risk score (0-100) and a list of red flags
+- Three verdicts only: `Suspicious`, `Unclear`, `No red flags found`
+- Extracts amount, transaction ID, sender, receiver, date/time and app name
+- Safe fallback: any unexpected model output becomes `Unclear`, never `No red flags found`
+- Prompt-injection defense: text inside the image is treated as data, never as instructions
+- Retries on temporary 503 errors, 45 second timeout, clear error messages
+- Images are processed in memory and are not stored
+- Cinematic UI: scanning animation, animated risk gauge, mobile friendly
 
----
+## Architecture
 
-## Project Structure
-
-```text
-scam-detector/
-├── main.py              # FastAPI application and endpoints
-├── requirements.txt     # Python dependencies
-├── .env.example         # Example environment variables
-├── .gitignore           # Git ignore rules (.env, venv/, etc.)
-└── README.md            # Simple project documentation
+```
+Browser (frontend/)  ->  FastAPI backend (main.py)  ->  Gemini API
+       resize to 1024px        validate, downscale,        strict JSON
+                               retry, validate verdict
 ```
 
----
+## Project structure
 
-## Getting Started
+```
+scam-detector/
+├── main.py              # FastAPI backend and /analyze endpoint
+├── frontend/            # index.html, style.css, app.js
+├── requirements.txt
+├── .env.example         # copy to .env and add your key
+├── test_gemini.py       # times Gemini calls
+└── list_models.py       # lists models and tests their speed
+```
 
-### 1. Set Up a Virtual Environment
+## Setup
 
-```bash
-# Windows (PowerShell)
+```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-
-# macOS / Linux
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 2. Install Dependencies
-
-```bash
 pip install -r requirements.txt
-```
-
-### 3. Add Your Gemini API Key
-
-Copy `.env.example` to `.env`:
-
-```bash
-# Windows
 Copy-Item .env.example .env
-
-# macOS / Linux
-cp .env.example .env
 ```
 
-Open `.env` and put your Google Gemini API key:
+Open `.env` and set your own values:
 
-```env
-GEMINI_API_KEY=your_actual_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
+```
+GEMINI_API_KEY=your_key_here
+GEMINI_MODEL=gemini-3-flash-preview
+ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 ```
 
----
+Model availability changes over time. Run `python list_models.py` to see which models work for your key.
 
-## Running the Server
+## Run locally
 
-Start the FastAPI app with Uvicorn:
-
-```bash
+Terminal 1 (backend):
+```powershell
 uvicorn main:app --reload
 ```
 
-The server starts at: `http://127.0.0.1:8000`
-
----
-
-## How to Use
-
-### 1. Simple Web Page
-
-Open `http://127.0.0.1:8000` in your web browser:
-1. Click to choose a payment screenshot (under 4 MB).
-2. Click **Check Screenshot**.
-3. View the verdict, explanation, and safety advice.
-
-### 2. API Endpoint (`POST /analyze`)
-
-Send a `POST` request with a multipart form upload:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/analyze" \
-  -H "accept: application/json" \
-  -F "image=@screenshot.png;type=image/png"
+Terminal 2 (frontend):
+```powershell
+python -m http.server 3000 --directory frontend
 ```
 
-#### Example API Response:
+Open http://127.0.0.1:3000
+
+## API
+
+`POST /analyze` with a multipart field named `file`.
 
 ```json
 {
   "verdict": "Suspicious",
-  "reason": "The transaction ID font is misaligned and the font weight differs from standard app text.",
-  "advice": "Please check your JazzCash/Easypaisa app or official SMS to confirm the payment. Do not trust screenshots alone.",
-  "filename": "screenshot.png",
-  "content_type": "image/png",
-  "size_bytes": 184320,
-  "model": "gemini-2.5-flash"
+  "risk_score": 95,
+  "reason": "Short explanation in simple English.",
+  "red_flags": ["Impossible date", "Short transaction ID"],
+  "extracted_fields": {
+    "amount": "Rs. 25,000",
+    "transaction_id": "12345",
+    "sender": "Sara A.",
+    "receiver": "Ali Traders",
+    "date_time": null,
+    "app_name": "DemoPay"
+  },
+  "advice": "Please check your JazzCash/Easypaisa app or official SMS to confirm the payment. Do not trust screenshots alone."
 }
 ```
 
-### 3. Health Check (`GET /health`)
+| Status | Meaning |
+|---|---|
+| 400 | Invalid or empty file |
+| 413 | File larger than 4 MB |
+| 500 | API key not set |
+| 503 | Gemini temporarily unavailable |
+| 504 | Gemini took too long |
 
-Check server and API key status:
+## Evaluation
 
-```bash
-curl "http://127.0.0.1:8000/health"
-```
+_Coming soon: test set of clean and fake receipts, confusion matrix, false positives and average response time._
 
----
+## Limitations
 
-## Error Messages (in Simple English)
+- A screenshot alone cannot prove a payment is real
+- The AI can miss well-made fakes or flag genuine screenshots
+- Free Gemini tier data may be used by Google, so do not upload CNIC, OTP, PIN or card numbers
+- Preview models can change or be removed without notice
 
-- `400 Bad Request`: "Invalid file type. Please upload an image file (e.g. JPEG, PNG, WEBP)." or "The uploaded file is empty."
-- `413 Request Entity Too Large`: "File size exceeds the 4 MB limit."
-- `500 Internal Server Error`: "GEMINI_API_KEY is not set. Please add it to your .env file."
-- `503 Service Unavailable`: "Gemini service is temporarily unavailable after 3 retry attempts. Please try again later."
+## Privacy
 
+Do not upload images showing CNIC, OTP, PIN or card numbers. Uploaded images are not saved by this app.
