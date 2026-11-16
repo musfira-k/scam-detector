@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Screenshot Scam Detector</title>
+  <!-- Google Fonts: Space Grotesk & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <!-- Ambient background glow elements -->
+  <div class="ambient-glow glow-top"></div>
+  <div class="ambient-glow glow-bottom"></div>
+
+  <main class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="badge-chip">AI-ASSISTED SCAM CHECK</div>
+      <h1 class="app-title">Scam Detector</h1>
+      <p class="app-description">Check payment screenshots from JazzCash, Easypaisa and mobile banking for scam warning
+        signs.</p>
+    </header>
+
+    <!-- Upload Card -->
+    <section class="glass-card upload-card" id="uploadCard">
+      <div class="upload-zone" id="uploadZone" role="button" tabindex="0" aria-label="Upload payment screenshot">
+        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" hidden>
+
+        <div class="upload-icon-wrapper">
+          <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+        </div>
+
+        <h2 class="upload-heading">Drop your screenshot here</h2>
+        <p class="upload-subheading">or <span class="highlight-link">browse from your device</span></p>
+        <span class="file-format-badge">JPEG, PNG, WEBP</span>
+      </div>
+
+      <!-- Privacy Note -->
+      <p class="privacy-note">
+        <svg class="privacy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span>Do not upload images showing CNIC, OTP, PIN or card numbers.</span>
+      </p>
+    </section>
+
+    <!-- Error Banner -->
+    <div class="error-banner hidden" id="errorBanner" role="alert">
+      <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <span class="error-text" id="errorText"></span>
+    </div>
+
+    <!-- Scanning & Preview Section -->
+    <section class="glass-card preview-card hidden" id="previewCard">
+      <div class="preview-header">
+        <h3 class="preview-title" id="previewTitle">Scanning image...</h3>
+        <button type="button" class="btn-text hidden" id="resetBtn">Analyze Another</button>
+      </div>
+
+      <!-- Image Preview with Animated Scanning Laser -->
+      <div class="preview-viewport" id="previewViewport">
+        <img id="previewImage" alt="Payment screenshot preview">
+        <div class="scan-laser" id="scanLaser"></div>
+      </div>
+
+      <!-- Wake-up message if request takes > 5s -->
+      <div class="wakeup-notice hidden" id="wakeupNotice"></div>
+    </section>
+
+    <!-- Results Section -->
+    <section class="results-container hidden" id="resultsSection">
+      <!-- Main Verdict & Risk Gauge Card -->
+      <div class="glass-card verdict-card" id="verdictCard">
+        <div class="verdict-header">
+          <div class="verdict-label-group">
+            <span class="section-caption">Analysis Result</span>
+            <div class="verdict-badge" id="verdictBadge">Checking...</div>
+          </div>
+
+          <!-- Circular Risk Gauge -->
+          <div class="gauge-wrapper">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-bg" cx="50" cy="50" r="40"></circle>
+              <circle class="gauge-progress" id="gaugeProgress" cx="50" cy="50" r="40"></circle>
+            </svg>
+            <div class="gauge-center">
+              <span class="gauge-number" id="gaugeNumber">0</span>
+              <span class="gauge-label">RISK</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Explanation Reason -->
+        <div class="verdict-body">
+          <h4 class="reason-heading">Explanation</h4>
+          <p class="reason-text" id="reasonText"></p>
+        </div>
+      </div>
+
+      <!-- Extracted Fields Card -->
+      <div class="glass-card fields-card">
+        <h3 class="card-section-title">Extracted Details</h3>
+        <div class="fields-grid">
+          <div class="field-item">
+            <span class="field-label">Amount</span>
+            <span class="field-value" id="fieldAmount">Not visible</span>
+          </div>
+          <div class="field-item">
+            <span class="field-label">Transaction ID</span>
+            <span class="field-value" id="fieldTxId">Not visible</span>
+          </div>
+          <div class="field-item">
+            <span class="field-label">Sender</span>
+            <span class="field-value" id="fieldSender">Not visible</span>
+          </div>
+          <div class="field-item">
+            <span class="field-label">Receiver</span>
+            <span class="field-value" id="fieldReceiver">Not visible</span>
+          </div>
+          <div class="field-item">
+            <span class="field-label">Date & Time</span>
+            <span class="field-value" id="fieldDateTime">Not visible</span>
+          </div>
+          <div class="field-item">
+            <span class="field-label">Application</span>
+            <span class="field-value" id="fieldAppName">Not visible</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Red Flags Card -->
+      <div class="glass-card red-flags-card" id="redFlagsCard">
+        <h3 class="card-section-title">Detected Red Flags</h3>
+        <ul class="red-flags-list" id="redFlagsList"></ul>
+      </div>
+
+      <!-- Advice Card -->
+      <div class="glass-card advice-card">
+        <div class="advice-header">
+          <svg class="advice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <h4 class="advice-title">Important Safety Advice</h4>
+        </div>
+        <p class="advice-body" id="adviceText"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
